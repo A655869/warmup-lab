@@ -9,6 +9,7 @@ export type PageEvent =
   | 'LOAD_OK'
   | 'LOAD_FAIL'
   | 'START' // 准备 → 训练（锁定鼠标）
+  | 'RELOAD' // 准备 → 加载（切换模块/距离需重建场景）
   | 'PAUSE' // 训练 → 暂停（Esc 失锁，必须停计时与机器人）
   | 'RESUME' // 暂停 → 训练
   | 'FINISH' // 训练/暂停 → 结算
@@ -18,7 +19,7 @@ export type PageEvent =
 const TRANSITIONS: Record<PageState, Partial<Record<PageEvent, PageState>>> = {
   loading: { LOAD_OK: 'ready', LOAD_FAIL: 'load-error' },
   'load-error': { RETRY: 'loading' },
-  ready: { START: 'training' },
+  ready: { START: 'training', RELOAD: 'loading' },
   training: { PAUSE: 'paused', FINISH: 'result' },
   paused: { RESUME: 'training', FINISH: 'result' },
   result: { RESTART: 'ready' },

@@ -12,13 +12,26 @@ import {
 import type { TrainingSession, SessionStats, StatsListener, SessionEvent, EventListener } from './TrainingSession';
 import { loadMap } from '@/scenarios/loader';
 import type { TrainingMap } from '@/scenarios/types';
+import { createScenario, type Scenario, type ScenarioMode, type RoundResult } from '@/scenarios/runner';
 import { WEAPONS, RUN_SPEED_MPS, type WeaponProfile } from '@/data/params';
 import { canFire } from '@/gameplay/shooting';
+import { spreadDeg, sampleSpread } from '@/gameplay/spread';
+import { mulberry32 } from '@/gameplay/rng';
 
 /** 目标血量：训练假设（手册：无可靠依据的部分明确写成训练近似值） */
 const TARGET_HP = 100;
 /** 击杀后重生延迟（秒） */
 const RESPAWN_SEC = 1.0;
+
+export interface SessionOptions {
+  /** 场景模式；null 为自由打靶（第一轮行为） */
+  scenario: ScenarioMode | null;
+  distanceM: number;
+  /** 可记录随机种子（手册 §10.3） */
+  seed: number;
+  /** 回合结束回调（含失败回合，不得剔除） */
+  onRound?: (rec: RoundResult) => void;
+}
 
 interface Target {
   group: THREE.Group;
@@ -86,6 +99,15 @@ export class GrayboxSession implements TrainingSession {
   private domCleanup: (() => void)[] = [];
   private readonly canvas: HTMLCanvasElement;
 
+  // —— 第二轮：场景规则 / 误差模型 / 随机种子 / 玩家速度 ——
+  private scenario: Scenario | null = null;
+  private rand: () => number = () => Math.random();
+  private seed = 1;
+  private playerSpeedMps = 0;
+  private wallMeshes: THREE.Object3D[] = [];
+  private shotIndex = 0;
+  private onRoundCb: ((rec: RoundResult) => void) | null = null;
+
   private constructor(canvas: HTMLCanvasElement, weapon: WeaponProfile) {
     this.canvas = canvas;
     this.weapon = weapon;
@@ -104,6 +126,7 @@ export class GrayboxSession implements TrainingSession {
     canvas: HTMLCanvasElement,
     mapUrl: string,
     weapon: WeaponProfile = WEAPONS.vandal,
+    options: SessionOptions = { scenario: null, distanceM: 20, seed: 1 },
   ): Promise<GrayboxSession> {
     await initRapier();
     const s = new GrayboxSession(canvas, weapon);
@@ -112,7 +135,76 @@ export class GrayboxSession implements TrainingSession {
     s.buildScene();
     s.bindDom();
     s.resize();
+    s.seed = options.seed;
+    s.rand = mulberry32(options.seed);
+    s.onRoundCb = options.onRound ?? null;
+    if (options.scenario) s.setupScenario(options.scenario, options.distanceM);
     return s;
+  }
+
+  /** 场景模式初始化：单目标管理，多余目标隐藏；可调距离移动掩体（手册 §9.2） */
+  private setupScenario(mode: ScenarioMode, distanceM: number): void {
+    if (!this.map || !this.phys) return;
+    // 多余目标退场（不受通用重生逻辑管理）
+    for (let i = 1; i < this.targets.length; i++) {
+      this.targets[i].alive = false;
+      this.targets[i].group.visible = false;
+    }
+    // 掩体出枪区：把 cover 箱体（网格+碰撞体）移到所选距离
+    if (mode === 'hold-angle') {
+      this.map.boxes.forEach((b, i) => {
+        if (b.tag !== 'cover') return;
+        b.position[2] = -distanceM;
+        this.boxMeshes[i].position.z = b.position[2];
+        this.phys!.boxColliders[i].setTranslation({ x: b.position[0], y: b.position[1], z: b.position[2] });
+      });
+    }
+    this.scenario = createScenario(mode, this.scenarioHooks(), distanceM);
+  }
+
+  private boxMeshes: THREE.Mesh[] = [];
+
+  private scenarioHooks() {
+    const t0 = () => this.targets[0];
+    return {
+      nowSec: () => this.simTime,
+      playerSpeedMps: () => this.playerSpeedMps,
+      rng: () => this.rand(),
+      placeTarget: (x: number, z: number) => t0().group.position.set(x, 0, z),
+      moveTarget: (dx: number) => t0().group.position.setX(t0().group.position.x + dx),
+      hideTarget: () => (t0().group.visible = false),
+      showTarget: () => (t0().group.visible = true),
+      targetAlive: () => t0().alive,
+      reviveTarget: () => {
+        t0().alive = true;
+        t0().hp = TARGET_HP;
+        t0().group.visible = true;
+      },
+      isTargetVisible: () => this.checkTargetVisible(),
+      endRound: (rec: RoundResult) => {
+        // 引擎只产出回合骨架；参数版本/武器等由外层补全（固定参数快照，§十四）
+        this.onRoundCb?.(rec);
+      },
+    };
+  }
+
+  /** 可见性口径：目标头部判定体中心与相机之间无墙体遮挡 */
+  private checkTargetVisible(): boolean {
+    const t = this.targets[0];
+    if (!t || !t.group.visible || !t.alive) return false;
+    this.syncCamera();
+    const headPos = new THREE.Vector3();
+    t.group.children[1].getWorldPosition(headPos);
+    const dir = headPos.clone().sub(this.camera.position);
+    const dist = dir.length();
+    dir.normalize();
+    const rc = new THREE.Raycaster(this.camera.position.clone(), dir, 0.01, dist - 0.1);
+    return rc.intersectObjects(this.wallMeshes, false).length === 0;
+  }
+
+  /** 会话中断：进行中的回合记为 abort（红线：失败回合不剔除） */
+  abortRound(): void {
+    this.scenario?.abort();
   }
 
   setWeapon(w: WeaponProfile): void {
@@ -140,6 +232,7 @@ export class GrayboxSession implements TrainingSession {
     ground.rotation.x = -Math.PI / 2;
     ground.userData.kind = 'wall';
     this.scene.add(ground);
+    this.wallMeshes.push(ground);
     this.scene.add(new THREE.GridHelper(Math.max(gx, gz), Math.max(gx, gz), 0x555c66, 0x2c313a));
 
     // 墙体/掩体：高对比配色（手册 §9.3）；userData.kind='wall' 供射线判遮挡
@@ -152,6 +245,8 @@ export class GrayboxSession implements TrainingSession {
       mesh.userData.kind = 'wall';
       this.scene.add(mesh);
       this.targetMeshes.push(mesh);
+      this.wallMeshes.push(mesh);
+      this.boxMeshes.push(mesh);
     }
     this.targetMeshes.push(ground);
 
@@ -204,15 +299,24 @@ export class GrayboxSession implements TrainingSession {
     const mu = (e: MouseEvent) => {
       if (e.button === 0) this.triggerHeld = false;
     };
+    // 失焦/切后台：清空按键与扳机，防止状态卡住（手册 §3.4 中断处理）
+    const blur = () => {
+      this.triggerHeld = false;
+      this.keys.clear();
+    };
     document.addEventListener('keydown', kd);
     document.addEventListener('keyup', ku);
     document.addEventListener('mousedown', md);
     document.addEventListener('mouseup', mu);
+    window.addEventListener('blur', blur);
+    document.addEventListener('visibilitychange', blur);
     this.domCleanup.push(() => {
       document.removeEventListener('keydown', kd);
       document.removeEventListener('keyup', ku);
       document.removeEventListener('mousedown', md);
       document.removeEventListener('mouseup', mu);
+      window.removeEventListener('blur', blur);
+      document.removeEventListener('visibilitychange', blur);
     });
   }
 
@@ -240,8 +344,9 @@ export class GrayboxSession implements TrainingSession {
       this.pitch = Math.max(-limit, Math.min(limit, this.pitch));
     }
 
-    // 2) 移动与碰撞（Rapier 胶囊体，§6.2/§6.3）
+    // 2) 移动与碰撞（Rapier 胶囊体，§6.2/§6.3），并跟踪玩家速度（急停指标）
     if (this.phys) {
+      const before = this.phys.body.translation();
       let fx = 0;
       let fz = 0;
       if (this.keys.has('KeyW')) fz -= 1;
@@ -262,15 +367,20 @@ export class GrayboxSession implements TrainingSession {
       } else {
         movePlayer(this.phys, 0, 0, 0, step); // 仍需重力/贴地步进
       }
+      const after = this.phys.body.translation();
+      this.playerSpeedMps =
+        Math.hypot(after.x - before.x, after.z - before.z) / step;
     }
 
-    // 3) 机器人决策 —— 第三轮接入
-    // 4) 姿态和命中区更新：目标重生与受击闪白恢复
+    // 3) 机器人决策 / 场景规则（第二轮：预设路线 peek，不还击 §11.2）
+    // 4) 姿态和命中区更新：目标重生与受击闪白恢复（场景模式下所有目标由场景规则管理，不走通用重生）
     for (const t of this.targets) {
-      if (!t.alive && this.simTime >= t.respawnAtSec) {
-        t.alive = true;
-        t.hp = TARGET_HP;
-        t.group.visible = true;
+      if (!this.scenario) {
+        if (!t.alive && this.simTime >= t.respawnAtSec) {
+          t.alive = true;
+          t.hp = TARGET_HP;
+          t.group.visible = true;
+        }
       }
       if (t.flashUntilSec > 0 && this.simTime >= t.flashUntilSec) {
         t.flashUntilSec = 0;
@@ -281,14 +391,16 @@ export class GrayboxSession implements TrainingSession {
       }
     }
 
-    // 5) 射击判定：射速检查 → 误差（第一阶段腰射，误差模型后续轮次）→ 射线 → 最近交点 → 部位 → 伤害
+    // 5) 射击判定：射速检查 → 误差 → 射线 → 最近交点 → 部位 → 伤害（§10.2）
     if (this.triggerHeld && canFire(this.lastShotSec, this.simTime, this.weapon.fireRate.value ?? 0)) {
       this.lastShotSec = this.simTime;
       this.shots += 1;
+      this.shotIndex += 1;
       this.fireRay();
     }
 
-    // 6) 事件记录（统计推送）+ 单调时钟推进
+    // 6) 事件记录：场景规则步进（回合结算含失败回合）+ 统计推送 + 单调时钟
+    this.scenario?.onStep(step);
     this.simTime += step;
     this.statsTimer += step;
     if (this.statsTimer >= 0.25) {
@@ -299,11 +411,23 @@ export class GrayboxSession implements TrainingSession {
 
   private fireRay(): void {
     this.syncCamera(); // 射击判定使用最新姿态
+    // 误差模型（§10.3）：基础散布 + 移动误差（官方 3°/6° 增量），种子随机取样
+    const deg = spreadDeg({ speedMps: this.playerSpeedMps, shotIndex: this.shotIndex });
+    const [yawOff, pitchOff] = sampleSpread(deg, this.rand);
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
     this.raycaster.far = 200;
+    // 在相机射线方向上叠加散布偏角
+    const dir = this.raycaster.ray.direction.clone();
+    const up = new THREE.Vector3(0, 1, 0);
+    dir.applyAxisAngle(up, yawOff);
+    const right = new THREE.Vector3().crossVectors(dir, up).normalize();
+    dir.applyAxisAngle(right, pitchOff);
+    this.raycaster.ray.direction.copy(dir);
     const hits = this.raycaster.intersectObjects(this.targetMeshes, false);
     this.emit({ type: 'fire', atSec: this.simTime });
 
+    let hitTarget = false;
+    let hitPart: 'head' | 'body' | 'leg' | null = null;
     let endPoint: THREE.Vector3 | null = null;
     const hit = hits[0];
     if (hit) {
@@ -312,11 +436,12 @@ export class GrayboxSession implements TrainingSession {
       if (ud.kind === 'target' && ud.targetIdx !== undefined) {
         const t = this.targets[ud.targetIdx];
         if (t.alive) {
-          const part = ud.part ?? 'body';
-          const dmg = this.weapon.baseDamage[part];
+          hitTarget = true;
+          hitPart = ud.part ?? 'body';
+          const dmg = this.weapon.baseDamage[hitPart];
           t.hp -= dmg;
           this.hits += 1;
-          this.emit({ type: 'hit', atSec: this.simTime, part });
+          this.emit({ type: 'hit', atSec: this.simTime, part: hitPart });
           if (t.hp <= 0) {
             t.alive = false;
             t.group.visible = false;
@@ -332,6 +457,8 @@ export class GrayboxSession implements TrainingSession {
       }
       // 命中墙体：仅弹着点，无伤害（§10.2 判断墙体或命中部位）
     }
+    // 场景规则记录本发结果（含散布导致的未命中，§10.4 覆盖「准星对准但散布未命中」）
+    this.scenario?.onFired({ hitTarget, part: hitPart });
     // 曳光：纯视觉效果，不参与命中判定（红线）
     this.spawnTracer(endPoint ?? this.raycaster.ray.at(80, new THREE.Vector3()));
   }
@@ -419,9 +546,12 @@ export class GrayboxSession implements TrainingSession {
     this.simTime = 0;
     this.shots = 0;
     this.hits = 0;
+    this.shotIndex = 0;
     this.lastShotSec = null;
     this.triggerHeld = false;
     this.keys.clear();
+    this.playerSpeedMps = 0;
+    this.rand = mulberry32(this.seed); // 同一种子 → 可复现（验收标准：复现测试）
     if (this.map && this.phys) {
       const s = this.map.playerSpawn.position;
       this.phys.body.setTranslation({ x: s[0], y: 0.9, z: s[2] }, true);
@@ -429,11 +559,14 @@ export class GrayboxSession implements TrainingSession {
       this.yaw = this.map.playerSpawn.yaw;
       this.pitch = 0;
     }
-    for (const t of this.targets) {
+    for (const [i, t] of this.targets.entries()) {
+      const scenarioManaged = this.scenario !== null;
+      if (scenarioManaged && i > 0) continue; // 场景模式下其余目标保持退场
       t.alive = true;
       t.hp = TARGET_HP;
       t.group.visible = true;
     }
+    this.scenario?.reset();
     this.syncCamera();
     this.loop.start();
   }

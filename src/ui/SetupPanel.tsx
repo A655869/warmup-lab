@@ -1,11 +1,16 @@
 import { WEAPONS, PARAM_STATUS_LABEL } from '@/data/params';
 
 export interface TrainingConfig {
-  scenarioId: string;
+  scenarioId: 'stop-shot' | 'hold-angle';
   weaponId: 'vandal' | 'phantom';
   distanceM: number;
   difficulty: 'standard' | 'plus';
 }
+
+export const SCENARIO_LABEL: Record<TrainingConfig['scenarioId'], string> = {
+  'stop-shot': '急停首发 · 灰盒通道',
+  'hold-angle': '架枪反应 · 掩体出枪区',
+};
 
 /** 准备界面侧边栏：模式 / 武器 / 距离 / 难度（手册 §5.2） */
 export function SetupPanel({
@@ -29,9 +34,13 @@ export function SetupPanel({
         <select
           className="w-full rounded-md border border-zinc-700 bg-zinc-800 p-2"
           value={config.scenarioId}
-          onChange={(e) => onChange({ ...config, scenarioId: e.target.value })}
+          onChange={(e) => onChange({ ...config, scenarioId: e.target.value as TrainingConfig['scenarioId'] })}
         >
-          <option value="graybox-stop-corridor-01">急停首发 · 灰盒通道</option>
+          {Object.entries(SCENARIO_LABEL).map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
         </select>
       </label>
 

@@ -20,6 +20,15 @@ export interface RoundRecord {
   timeToFirstShotSec: number | null;
   timeToFirstHitSec: number | null;
   timeToKillSec: number | null;
+  /** 开火/命中数 */
+  shots: number;
+  hits: number;
+  /** 急停首发指标：首发开火时速度（m/s） */
+  speedAtFirstShotMps: number | null;
+  /** 急停首发指标：首发是否命中 */
+  firstShotHit: boolean | null;
+  /** 急停首发指标：停稳到首发的等待时间（秒），未停稳即开火为 null */
+  stopWaitSec: number | null;
 }
 
 export interface SessionRecord {

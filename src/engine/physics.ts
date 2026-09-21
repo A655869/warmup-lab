@@ -16,6 +16,8 @@ export interface PlayerPhysics {
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
   controller: RAPIER.KinematicCharacterController;
+  /** 地图箱体的碰撞体，与 map.boxes 顺序一致（用于可调距离时移动掩体） */
+  boxColliders: RAPIER.Collider[];
   /** 垂直速度（重力累积）， grounded 时清零 */
   vy: number;
 }
@@ -37,12 +39,15 @@ export function createPhysics(map: TrainingMap): PlayerPhysics {
   );
 
   // 墙体/掩体：简化碰撞体（与视觉网格一一对应）
+  const boxColliders: RAPIER.Collider[] = [];
   for (const b of map.boxes) {
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(b.size[0] / 2, b.size[1] / 2, b.size[2] / 2).setTranslation(
-        b.position[0],
-        b.position[1],
-        b.position[2],
+    boxColliders.push(
+      world.createCollider(
+        RAPIER.ColliderDesc.cuboid(b.size[0] / 2, b.size[1] / 2, b.size[2] / 2).setTranslation(
+          b.position[0],
+          b.position[1],
+          b.position[2],
+        ),
       ),
     );
   }
@@ -61,7 +66,7 @@ export function createPhysics(map: TrainingMap): PlayerPhysics {
   controller.enableSnapToGround(0.4);
   controller.setApplyImpulsesToDynamicBodies(false);
 
-  return { world, body, collider, controller, vy: 0 };
+  return { world, body, collider, controller, boxColliders, vy: 0 };
 }
 
 const GRAVITY = 18; // m/s²，手感取向的工程值
