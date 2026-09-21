@@ -1,0 +1,92 @@
+import type { WeaponProfile } from './types';
+
+/**
+ * 幻影（Phantom）参数文件（开发手册 §10.1）。
+ * 标注规范同 vandal.ts。
+ */
+export const PHANTOM: WeaponProfile = {
+  id: 'phantom',
+  displayName: '幻影',
+  fireRate: {
+    name: '射速',
+    value: 11,
+    unit: '发/秒',
+    weapon: 'phantom',
+    gameVersion: '9.10',
+    source: '官方公开武器数据（社区 valorant-api 快照）',
+    verifiedAt: '2026-09-21',
+    status: 'official',
+  },
+  ledger: [
+    {
+      name: '基础伤害（0-15m 头/身/腿）',
+      value: '156/39/33',
+      unit: 'HP',
+      weapon: 'phantom',
+      gameVersion: '9.10',
+      source: '官方公开武器数据（社区 valorant-api 快照）',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '基础伤害（15-30m 头/身/腿）',
+      value: '140/35/29',
+      unit: 'HP',
+      weapon: 'phantom',
+      gameVersion: '9.10',
+      source: '官方公开武器数据（社区 valorant-api 快照）',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '基础伤害（30-50m 头/身/腿）',
+      value: '124/31/26',
+      unit: 'HP',
+      weapon: 'phantom',
+      gameVersion: '9.10',
+      source: '官方公开武器数据（社区 valorant-api 快照）',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '步枪走动移动误差增量',
+      value: 3,
+      unit: '度',
+      weapon: '步枪通用',
+      gameVersion: '9.10',
+      source: '官方补丁说明',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '步枪跑动移动误差增量',
+      value: 6,
+      unit: '度',
+      weapon: '步枪通用',
+      gameVersion: '9.10',
+      source: '官方补丁说明',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '持枪跑步速度',
+      value: null,
+      unit: 'm/s',
+      weapon: 'phantom',
+      gameVersion: '待核验',
+      source: '训练假设，待实测',
+      verifiedAt: null,
+      status: 'uncalibrated',
+    },
+    {
+      name: '静步移动速度',
+      value: null,
+      unit: 'm/s',
+      weapon: 'phantom',
+      gameVersion: '待核验',
+      source: '训练假设，待实测',
+      verifiedAt: null,
+      status: 'uncalibrated',
+    },
+  ],
+};

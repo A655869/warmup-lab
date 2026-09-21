@@ -1,0 +1,20 @@
+{
+  "formatVersion": 1,
+  "id": "graybox-stop-corridor-01",
+  "name": "灰盒 · 急停通道 01",
+  "spaceType": "stop-corridor",
+  "distances": [10, 20, 30],
+  "ground": { "kind": "ground", "size": [40, 44] },
+  "boxes": [
+    { "kind": "box", "position": [-6, 1.5, -10], "size": [1, 3, 20], "tag": "wall" },
+    { "kind": "box", "position": [6, 1.5, -10], "size": [1, 3, 20], "tag": "wall" },
+    { "kind": "box", "position": [0, 1.5, -21], "size": [13, 3, 1], "tag": "wall" },
+    { "kind": "box", "position": [2.5, 0.75, -12], "size": [1.5, 1.5, 1.5], "tag": "cover" }
+  ],
+  "playerSpawn": { "position": [0, 0, 0], "yaw": 0 },
+  "targetSpawns": [
+    { "position": [0, 0, -20], "yaw": 0 },
+    { "position": [-2, 0, -20], "yaw": 0 },
+    { "position": [2, 0, -20], "yaw": 0 }
+  ]
+}

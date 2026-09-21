@@ -1,0 +1,103 @@
+import type { WeaponProfile } from './types';
+
+/**
+ * 狂徒（Vandal）参数文件（开发手册 §10.1）。
+ * 数值来源：官方补丁说明 / 社区公开资料；无可靠依据的标为「训练假设」或「待校准」。
+ * 注意：发布后运行时使用固定参数快照，不依赖外部 API 实时数据（设计方案 §3.4）。
+ */
+export const VANDAL: WeaponProfile = {
+  id: 'vandal',
+  displayName: '狂徒',
+  fireRate: {
+    name: '射速',
+    value: 9.75,
+    unit: '发/秒',
+    weapon: 'vandal',
+    gameVersion: '9.10',
+    source: '官方公开武器数据（社区 valorant-api 快照）',
+    verifiedAt: '2026-09-21',
+    status: 'official',
+  },
+  ledger: [
+    {
+      name: '基础伤害（0-50m 头/身/腿）',
+      value: '160/40/34',
+      unit: 'HP',
+      weapon: 'vandal',
+      gameVersion: '9.10',
+      source: '官方公开武器数据（社区 valorant-api 快照）',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '步枪走动移动误差增量',
+      value: 3,
+      unit: '度',
+      weapon: '步枪通用',
+      gameVersion: '9.10',
+      source: '官方补丁说明',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '步枪跑动移动误差增量',
+      value: 6,
+      unit: '度',
+      weapon: '步枪通用',
+      gameVersion: '9.10',
+      source: '官方补丁说明',
+      verifiedAt: '2026-09-21',
+      status: 'official',
+    },
+    {
+      name: '持枪跑步速度',
+      value: null,
+      unit: 'm/s',
+      weapon: 'vandal',
+      gameVersion: '待核验',
+      source: '训练假设，待实测',
+      verifiedAt: null,
+      status: 'uncalibrated',
+    },
+    {
+      name: '静步移动速度',
+      value: null,
+      unit: 'm/s',
+      weapon: 'vandal',
+      gameVersion: '待核验',
+      source: '训练假设，待实测',
+      verifiedAt: null,
+      status: 'uncalibrated',
+    },
+    {
+      name: '松键停稳时间／反向急停停稳时间',
+      value: null,
+      unit: 'ms',
+      weapon: '全部',
+      gameVersion: '待实验',
+      source: '分别测量松键与反向输入时的速度变化和精度恢复，不预设数值',
+      verifiedAt: null,
+      status: 'uncalibrated',
+    },
+    {
+      name: '精度恢复阈值（死亡区间比例）',
+      value: null,
+      unit: '%',
+      weapon: '全部',
+      gameVersion: '待核验',
+      source: '实验估计',
+      verifiedAt: null,
+      status: 'experiment',
+    },
+    {
+      name: '空中误差增量',
+      value: null,
+      unit: '度',
+      weapon: '步枪',
+      gameVersion: '待核验',
+      source: '训练假设',
+      verifiedAt: null,
+      status: 'assumption',
+    },
+  ],
+};
