@@ -68,7 +68,10 @@ export function AppShell() {
     const session = sessionRef.current;
     if (!session) return;
     const support = await session.pointerInput.requestLock();
-    if (support === 'unsupported') setRawInputNote('当前浏览器不支持原始鼠标输入，已降级（可能影响手感一致性）。');
+    if (support === 'unsupported')
+      setRawInputNote('当前浏览器不支持原始鼠标输入，已降级（可能影响手感一致性）。');
+    else if (support === 'unknown' && !session.pointerInput.isLocked())
+      setRawInputNote('鼠标锁定失败：请直接点击画面中央后再移动鼠标；若仍无效请用 Chrome/Edge 打开。');
     session.reset();
     send('START');
     // eslint-disable-next-line react-hooks/exhaustive-deps

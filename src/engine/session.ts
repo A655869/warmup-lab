@@ -99,11 +99,40 @@ export class GrayboxSession implements TrainingSession {
 
     const spawn = this.map.playerSpawn;
     this.camera.position.set(spawn.position[0], 1.6, spawn.position[2]);
-    this.camera.rotation.set(0, spawn.yaw, 0, 'YXZ');
+    this.yaw = spawn.yaw;
+    this.pitch = 0;
+    this.applyLook();
+  }
+
+  private yaw = 0;
+  private pitch = 0;
+  /**
+   * 灵敏度（radiansPerCount）：占位初值，标记为「待校准」。
+   * 必须通过「转身距离校准工具」实测核验后才允许作为默认值（手册 §7.1）。
+   * 参考：无畏契约灵敏度 1.0 约等于 0.07 度/count（社区换算，未核验）。
+   */
+  private sensRadiansPerCount = 0.07 * (Math.PI / 180);
+
+  setSensitivity(radiansPerCount: number): void {
+    if (!(radiansPerCount > 0) || radiansPerCount > 0.05) return; // 范围校验，非法输入不静默忽略
+    this.sensRadiansPerCount = radiansPerCount;
+  }
+
+  private applyLook(): void {
+    this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
   }
 
   private simulate(step: number): void {
-    // 阶段 0：仅推进单调时钟；移动/碰撞/机器人/命中在后续轮次接入。
+    // 视角更新：yaw -= deltaX * radiansPerCount；鼠标位移绝不乘帧时间（手册 §7.1）
+    const { dx, dy } = this.input.consumeDelta();
+    if (dx !== 0 || dy !== 0) {
+      this.yaw -= dx * this.sensRadiansPerCount;
+      this.pitch -= dy * this.sensRadiansPerCount;
+      const limit = Math.PI / 2 - 0.01;
+      this.pitch = Math.max(-limit, Math.min(limit, this.pitch));
+      this.applyLook();
+    }
+    // 阶段 0：仅推进单调时钟与视角；移动/碰撞/机器人/命中在后续轮次接入。
     this.simTime += step;
     this.statsTimer += step;
     if (this.statsTimer >= 0.25) {
@@ -162,6 +191,11 @@ export class GrayboxSession implements TrainingSession {
   reset(): void {
     this.loop.stop();
     this.simTime = 0;
+    if (this.map) {
+      this.yaw = this.map.playerSpawn.yaw;
+      this.pitch = 0;
+      this.applyLook();
+    }
     this.loop.start();
   }
 
