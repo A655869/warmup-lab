@@ -38,6 +38,14 @@ export interface WeaponProfile {
   displayName: string;
   /** 射速（发/秒） */
   fireRate: ParamEntry<number>;
+  /** 基础伤害（头/身/腿），取第一个距离段；来源与状态以台账条目为准 */
+  baseDamage: { head: number; body: number; leg: number };
   /** 各参数台账条目 */
   ledger: ParamEntry[];
 }
+
+/**
+ * 移动速度（训练假设，待校准——手册参数台账：持枪跑步速度「待校准」）。
+ * 仅用于第一阶段的工程初值，严禁对外声称为游戏真实数值。
+ */
+export const RUN_SPEED_MPS = 5.4;

@@ -18,6 +18,7 @@ export const VANDAL: WeaponProfile = {
     verifiedAt: '2026-09-21',
     status: 'official',
   },
+  baseDamage: { head: 160, body: 40, leg: 34 },
   ledger: [
     {
       name: '基础伤害（0-50m 头/身/腿）',

@@ -22,3 +22,11 @@ export interface SessionStats {
 }
 
 export type StatsListener = (stats: SessionStats) => void;
+
+/** 高频游戏事件（开火/命中/击杀），独立于 250ms 聚合统计推送 */
+export type SessionEvent =
+  | { type: 'fire'; atSec: number }
+  | { type: 'hit'; atSec: number; part: 'head' | 'body' | 'leg' }
+  | { type: 'kill'; atSec: number };
+
+export type EventListener = (e: SessionEvent) => void;

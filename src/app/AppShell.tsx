@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePageMachine, usePointerLockPause } from './hooks';
 import { isSupportedDevice } from './device';
 import { GrayboxSession } from '@/engine/session';
-import type { SessionStats } from '@/engine/TrainingSession';
+import type { SessionStats, SessionEvent } from '@/engine/TrainingSession';
+import { WEAPONS } from '@/data/params';
 import { DeviceNotice } from '@/ui/DeviceNotice';
 import { LoadingScreen, LoadErrorScreen } from '@/ui/LoadingScreen';
 import { SetupPanel, type TrainingConfig } from '@/ui/SetupPanel';
@@ -18,6 +19,7 @@ export function AppShell() {
   const sessionRef = useRef<GrayboxSession | null>(null);
   const [loadError, setLoadError] = useState('');
   const [stats, setStats] = useState<SessionStats | null>(null);
+  const [lastEvent, setLastEvent] = useState<SessionEvent | null>(null);
   const [rawInputNote, setRawInputNote] = useState<string | null>(null);
   const [config, setConfig] = useState<TrainingConfig>({
     scenarioId: 'graybox-stop-corridor-01',
@@ -25,6 +27,11 @@ export function AppShell() {
     distanceM: 20,
     difficulty: 'standard',
   });
+
+  // 武器切换即时生效（不需重建会话）
+  useEffect(() => {
+    sessionRef.current?.setWeapon(WEAPONS[config.weaponId]);
+  }, [config.weaponId]);
 
   // 加载资产（状态：loading）；失败进入 load-error，不允许黑屏
   // generation 守卫：StrictMode/重复触发时丢弃过期启动，避免非法状态转换
@@ -34,12 +41,19 @@ export function AppShell() {
     sessionRef.current?.dispose();
     sessionRef.current = null;
     try {
-      const session = await GrayboxSession.create(canvasRef.current, MAP_URL);
+      const session = await GrayboxSession.create(
+        canvasRef.current,
+        MAP_URL,
+        WEAPONS[config.weaponId],
+      );
       if (gen !== bootGenRef.current) {
         session.dispose(); // 过期启动：释放资源后丢弃
         return;
       }
       session.onStats(setStats);
+      session.onEvent(setLastEvent);
+      // 调试钩子：便于端到端验证与问题排查
+      (window as unknown as { __session?: GrayboxSession }).__session = session;
       session.start(); // 准备界面中场景照常渲染
       sessionRef.current = session;
       send('LOAD_OK');
@@ -103,7 +117,7 @@ export function AppShell() {
       {/* 中间三维场景：首屏即进入可操作的训练准备界面（手册 §5.2） */}
       <main className="relative flex-1">
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-        {state === 'training' && <TrainingHUD stats={stats} />}
+        {state === 'training' && <TrainingHUD stats={stats} lastEvent={lastEvent} />}
         {state === 'paused' && (
           <PausedOverlay
             onResume={resume}

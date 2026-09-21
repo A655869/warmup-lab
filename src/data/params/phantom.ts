@@ -17,6 +17,7 @@ export const PHANTOM: WeaponProfile = {
     verifiedAt: '2026-09-21',
     status: 'official',
   },
+  baseDamage: { head: 156, body: 39, leg: 33 },
   ledger: [
     {
       name: '基础伤害（0-15m 头/身/腿）',

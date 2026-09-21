@@ -1,16 +1,51 @@
 import * as THREE from 'three';
 import { FixedStepLoop } from './loop';
 import { PointerLockInput } from './input';
-import type { TrainingSession, SessionStats, StatsListener } from './TrainingSession';
+import {
+  initRapier,
+  createPhysics,
+  movePlayer,
+  freePhysics,
+  EYE_OFFSET,
+  type PlayerPhysics,
+} from './physics';
+import type { TrainingSession, SessionStats, StatsListener, SessionEvent, EventListener } from './TrainingSession';
 import { loadMap } from '@/scenarios/loader';
 import type { TrainingMap } from '@/scenarios/types';
+import { WEAPONS, RUN_SPEED_MPS, type WeaponProfile } from '@/data/params';
+import { canFire } from '@/gameplay/shooting';
+
+/** 目标血量：训练假设（手册：无可靠依据的部分明确写成训练近似值） */
+const TARGET_HP = 100;
+/** 击杀后重生延迟（秒） */
+const RESPAWN_SEC = 1.0;
+
+interface Target {
+  group: THREE.Group;
+  bodyMat: THREE.MeshLambertMaterial;
+  headMat: THREE.MeshLambertMaterial;
+  spawn: [number, number, number];
+  hp: number;
+  alive: boolean;
+  respawnAtSec: number;
+  /** 受击闪白截止时刻（秒） */
+  flashUntilSec: number;
+}
+
+interface Tracer {
+  line: THREE.Line;
+  geo: THREE.BufferGeometry;
+  mat: THREE.LineBasicMaterial;
+  untilSec: number;
+}
 
 /**
- * 阶段 0 引擎会话骨架：
- * - 加载灰盒地图并渲染（Three.js）；
- * - 120 Hz 固定步长模拟循环（当前仅推进时钟，移动/物理在阶段 1 接入 Rapier）；
- * - 每 250ms 向 React 推送一次聚合统计；
- * - dispose 释放事件监听、渲染器与几何/材质资源（手册 §6.4）。
+ * 第一轮引擎会话：
+ * - Rapier 胶囊体移动与碰撞（手册 §6.3）；
+ * - 模拟步顺序（§6.2）：输入采样 → 移动与碰撞 → 机器人决策（第三轮）→
+ *   姿态和命中区更新 → 射击判定 → 事件记录；
+ * - 即时射线判定（§10.2），曳光仅是视觉效果，不参与命中；
+ * - dispose 释放事件监听、物理世界、纹理和几何资源（§6.4）。
  */
 export class GrayboxSession implements TrainingSession {
   private renderer: THREE.WebGLRenderer;
@@ -19,16 +54,41 @@ export class GrayboxSession implements TrainingSession {
   private loop: FixedStepLoop;
   private input: PointerLockInput;
   private map: TrainingMap | null = null;
+  private phys: PlayerPhysics | null = null;
+  private weapon: WeaponProfile;
+  private raycaster = new THREE.Raycaster();
+
+  private targets: Target[] = [];
+  private targetMeshes: THREE.Object3D[] = [];
+  private tracers: Tracer[] = [];
+
+  private keys = new Set<string>();
+  private triggerHeld = false;
+  private lastShotSec: number | null = null;
+  private shots = 0;
+  private hits = 0;
+
+  private yaw = 0;
+  private pitch = 0;
+  /**
+   * 灵敏度（radiansPerCount）：占位初值，标记「待校准」，
+   * 须经「转身距离校准工具」实测核验（手册 §7.1）。
+   */
+  private sensRadiansPerCount = 0.07 * (Math.PI / 180);
+
   private simTime = 0;
   private statsTimer = 0;
   private lastFrameMs = 0;
-  private listeners = new Set<StatsListener>();
+  private statsListeners = new Set<StatsListener>();
+  private eventListeners = new Set<EventListener>();
   private disposed = false;
   private disposables: { dispose(): void }[] = [];
+  private domCleanup: (() => void)[] = [];
   private readonly canvas: HTMLCanvasElement;
 
-  private constructor(canvas: HTMLCanvasElement) {
+  private constructor(canvas: HTMLCanvasElement, weapon: WeaponProfile) {
     this.canvas = canvas;
+    this.weapon = weapon;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     // 垂直 FOV（Three.js 相机语义），水平 FOV 按画面比例换算（手册 §7.2）
@@ -40,12 +100,23 @@ export class GrayboxSession implements TrainingSession {
     });
   }
 
-  static async create(canvas: HTMLCanvasElement, mapUrl: string): Promise<GrayboxSession> {
-    const s = new GrayboxSession(canvas);
+  static async create(
+    canvas: HTMLCanvasElement,
+    mapUrl: string,
+    weapon: WeaponProfile = WEAPONS.vandal,
+  ): Promise<GrayboxSession> {
+    await initRapier();
+    const s = new GrayboxSession(canvas, weapon);
     s.map = await loadMap(mapUrl); // 校验失败会抛出 → 进入「加载失败」页
+    s.phys = createPhysics(s.map);
     s.buildScene();
+    s.bindDom();
     s.resize();
     return s;
+  }
+
+  setWeapon(w: WeaponProfile): void {
+    this.weapon = w;
   }
 
   private track<T extends { dispose(): void }>(r: T): T {
@@ -62,77 +133,162 @@ export class GrayboxSession implements TrainingSession {
     this.scene.add(sun);
 
     const [gx, gz] = this.map.ground.size;
-    const groundGeo = this.track(new THREE.PlaneGeometry(gx, gz));
-    const groundMat = this.track(new THREE.MeshLambertMaterial({ color: 0x3a4048 }));
-    const ground = new THREE.Mesh(groundGeo, groundMat);
+    const ground = new THREE.Mesh(
+      this.track(new THREE.PlaneGeometry(gx, gz)),
+      this.track(new THREE.MeshLambertMaterial({ color: 0x3a4048 })),
+    );
     ground.rotation.x = -Math.PI / 2;
+    ground.userData.kind = 'wall';
     this.scene.add(ground);
-    const grid = new THREE.GridHelper(Math.max(gx, gz), Math.max(gx, gz), 0x555c66, 0x2c313a);
-    this.scene.add(grid);
+    this.scene.add(new THREE.GridHelper(Math.max(gx, gz), Math.max(gx, gz), 0x555c66, 0x2c313a));
 
-    // 墙体/掩体：高对比配色，避免装饰影响目标识别（手册 §9.3）
+    // 墙体/掩体：高对比配色（手册 §9.3）；userData.kind='wall' 供射线判遮挡
     for (const b of this.map.boxes) {
-      const geo = this.track(new THREE.BoxGeometry(...b.size));
-      const mat = this.track(
-        new THREE.MeshLambertMaterial({ color: b.tag === 'cover' ? 0x7a6a4f : 0x59616e }),
+      const mesh = new THREE.Mesh(
+        this.track(new THREE.BoxGeometry(...b.size)),
+        this.track(new THREE.MeshLambertMaterial({ color: b.tag === 'cover' ? 0x7a6a4f : 0x59616e })),
       );
-      const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(...b.position);
+      mesh.userData.kind = 'wall';
       this.scene.add(mesh);
+      this.targetMeshes.push(mesh);
     }
+    this.targetMeshes.push(ground);
 
-    // 几何人形占位目标（胶囊+方块组合，手册 §8.1 第一步）
-    for (const t of this.map.targetSpawns) {
-      const body = new THREE.Mesh(
-        this.track(new THREE.CapsuleGeometry(0.35, 0.9, 4, 12)),
-        this.track(new THREE.MeshLambertMaterial({ color: 0xc24b4b })),
-      );
-      body.position.set(t.position[0], 0.95, t.position[2]);
-      this.scene.add(body);
-      const head = new THREE.Mesh(
-        this.track(new THREE.SphereGeometry(0.22, 16, 12)),
-        this.track(new THREE.MeshLambertMaterial({ color: 0xd9d9d9 })),
-      );
-      head.position.set(t.position[0], 1.75, t.position[2]);
-      this.scene.add(head);
+    // 几何人形占位目标（胶囊+方块组合，手册 §8.1 第一步）；
+    // 命中区即判定体本身：头部球体 / 躯干胶囊（§8.3 简化判定体）
+    for (const [idx, t] of this.map.targetSpawns.entries()) {
+      const group = new THREE.Group();
+      const bodyMat = this.track(new THREE.MeshLambertMaterial({ color: 0xc24b4b }));
+      const headMat = this.track(new THREE.MeshLambertMaterial({ color: 0xd9d9d9 }));
+      const body = new THREE.Mesh(this.track(new THREE.CapsuleGeometry(0.35, 0.9, 4, 12)), bodyMat);
+      body.position.y = 0.95;
+      body.userData = { kind: 'target', part: 'body', targetIdx: idx };
+      const head = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.22, 16, 12)), headMat);
+      head.position.y = 1.75;
+      head.userData = { kind: 'target', part: 'head', targetIdx: idx };
+      group.add(body, head);
+      group.position.set(...t.position);
+      this.scene.add(group);
+      this.targetMeshes.push(body, head);
+      this.targets.push({
+        group,
+        bodyMat,
+        headMat,
+        spawn: [...t.position],
+        hp: TARGET_HP,
+        alive: true,
+        respawnAtSec: 0,
+        flashUntilSec: 0,
+      });
     }
 
     const spawn = this.map.playerSpawn;
-    this.camera.position.set(spawn.position[0], 1.6, spawn.position[2]);
     this.yaw = spawn.yaw;
     this.pitch = 0;
-    this.applyLook();
+    this.syncCamera();
   }
 
-  private yaw = 0;
-  private pitch = 0;
-  /**
-   * 灵敏度（radiansPerCount）：占位初值，标记为「待校准」。
-   * 必须通过「转身距离校准工具」实测核验后才允许作为默认值（手册 §7.1）。
-   * 参考：无畏契约灵敏度 1.0 约等于 0.07 度/count（社区换算，未核验）。
-   */
-  private sensRadiansPerCount = 0.07 * (Math.PI / 180);
+  /** 键盘与扳机监听（仅锁定时生效），dispose 时全部移除 */
+  private bindDom(): void {
+    const onKey = (down: boolean) => (e: KeyboardEvent) => {
+      if (!this.input.isLocked()) return;
+      if (down) this.keys.add(e.code);
+      else this.keys.delete(e.code);
+    };
+    const kd = onKey(true);
+    const ku = onKey(false);
+    const md = (e: MouseEvent) => {
+      if (this.input.isLocked() && e.button === 0) this.triggerHeld = true;
+    };
+    const mu = (e: MouseEvent) => {
+      if (e.button === 0) this.triggerHeld = false;
+    };
+    document.addEventListener('keydown', kd);
+    document.addEventListener('keyup', ku);
+    document.addEventListener('mousedown', md);
+    document.addEventListener('mouseup', mu);
+    this.domCleanup.push(() => {
+      document.removeEventListener('keydown', kd);
+      document.removeEventListener('keyup', ku);
+      document.removeEventListener('mousedown', md);
+      document.removeEventListener('mouseup', mu);
+    });
+  }
 
   setSensitivity(radiansPerCount: number): void {
-    if (!(radiansPerCount > 0) || radiansPerCount > 0.05) return; // 范围校验，非法输入不静默忽略
+    if (!(radiansPerCount > 0) || radiansPerCount > 0.05) return; // 范围校验（手册 §5.3）
     this.sensRadiansPerCount = radiansPerCount;
   }
 
-  private applyLook(): void {
+  private syncCamera(): void {
+    if (this.phys) {
+      const p = this.phys.body.translation();
+      this.camera.position.set(p.x, p.y + EYE_OFFSET, p.z);
+    }
     this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
+    this.camera.updateMatrixWorld(); // 射线判定在渲染帧之间进行，必须手动刷新矩阵
   }
 
   private simulate(step: number): void {
-    // 视角更新：yaw -= deltaX * radiansPerCount；鼠标位移绝不乘帧时间（手册 §7.1）
+    // 1) 输入采样（视角：鼠标位移绝不乘帧时间，§7.1）
     const { dx, dy } = this.input.consumeDelta();
     if (dx !== 0 || dy !== 0) {
       this.yaw -= dx * this.sensRadiansPerCount;
       this.pitch -= dy * this.sensRadiansPerCount;
       const limit = Math.PI / 2 - 0.01;
       this.pitch = Math.max(-limit, Math.min(limit, this.pitch));
-      this.applyLook();
     }
-    // 阶段 0：仅推进单调时钟与视角；移动/碰撞/机器人/命中在后续轮次接入。
+
+    // 2) 移动与碰撞（Rapier 胶囊体，§6.2/§6.3）
+    if (this.phys) {
+      let fx = 0;
+      let fz = 0;
+      if (this.keys.has('KeyW')) fz -= 1;
+      if (this.keys.has('KeyS')) fz += 1;
+      if (this.keys.has('KeyA')) fx -= 1;
+      if (this.keys.has('KeyD')) fx += 1;
+      if (fx !== 0 || fz !== 0) {
+        const len = Math.hypot(fx, fz);
+        fx /= len;
+        fz /= len;
+        // 按 yaw 旋转到世界系
+        const sin = Math.sin(this.yaw);
+        const cos = Math.cos(this.yaw);
+        const wx = fx * cos + fz * sin;
+        const wz = -fx * sin + fz * cos;
+        // 速度为「训练假设」初值（参数台账：持枪跑步速度待校准）
+        movePlayer(this.phys, wx, wz, RUN_SPEED_MPS, step);
+      } else {
+        movePlayer(this.phys, 0, 0, 0, step); // 仍需重力/贴地步进
+      }
+    }
+
+    // 3) 机器人决策 —— 第三轮接入
+    // 4) 姿态和命中区更新：目标重生与受击闪白恢复
+    for (const t of this.targets) {
+      if (!t.alive && this.simTime >= t.respawnAtSec) {
+        t.alive = true;
+        t.hp = TARGET_HP;
+        t.group.visible = true;
+      }
+      if (t.flashUntilSec > 0 && this.simTime >= t.flashUntilSec) {
+        t.flashUntilSec = 0;
+        t.bodyMat.color.setHex(0xc24b4b);
+        t.headMat.color.setHex(0xd9d9d9);
+        t.bodyMat.emissive.setHex(0x000000);
+        t.headMat.emissive.setHex(0x000000);
+      }
+    }
+
+    // 5) 射击判定：射速检查 → 误差（第一阶段腰射，误差模型后续轮次）→ 射线 → 最近交点 → 部位 → 伤害
+    if (this.triggerHeld && canFire(this.lastShotSec, this.simTime, this.weapon.fireRate.value ?? 0)) {
+      this.lastShotSec = this.simTime;
+      this.shots += 1;
+      this.fireRay();
+    }
+
+    // 6) 事件记录（统计推送）+ 单调时钟推进
     this.simTime += step;
     this.statsTimer += step;
     if (this.statsTimer >= 0.25) {
@@ -141,8 +297,67 @@ export class GrayboxSession implements TrainingSession {
     }
   }
 
+  private fireRay(): void {
+    this.syncCamera(); // 射击判定使用最新姿态
+    this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    this.raycaster.far = 200;
+    const hits = this.raycaster.intersectObjects(this.targetMeshes, false);
+    this.emit({ type: 'fire', atSec: this.simTime });
+
+    let endPoint: THREE.Vector3 | null = null;
+    const hit = hits[0];
+    if (hit) {
+      endPoint = hit.point;
+      const ud = hit.object.userData as { kind?: string; part?: 'head' | 'body' | 'leg'; targetIdx?: number };
+      if (ud.kind === 'target' && ud.targetIdx !== undefined) {
+        const t = this.targets[ud.targetIdx];
+        if (t.alive) {
+          const part = ud.part ?? 'body';
+          const dmg = this.weapon.baseDamage[part];
+          t.hp -= dmg;
+          this.hits += 1;
+          this.emit({ type: 'hit', atSec: this.simTime, part });
+          if (t.hp <= 0) {
+            t.alive = false;
+            t.group.visible = false;
+            t.respawnAtSec = this.simTime + RESPAWN_SEC;
+            this.emit({ type: 'kill', atSec: this.simTime });
+          } else {
+            // 受击闪白反馈
+            t.flashUntilSec = this.simTime + 0.12;
+            t.bodyMat.emissive.setHex(0xffffff);
+            t.headMat.emissive.setHex(0xffffff);
+          }
+        }
+      }
+      // 命中墙体：仅弹着点，无伤害（§10.2 判断墙体或命中部位）
+    }
+    // 曳光：纯视觉效果，不参与命中判定（红线）
+    this.spawnTracer(endPoint ?? this.raycaster.ray.at(80, new THREE.Vector3()));
+  }
+
+  private spawnTracer(end: THREE.Vector3): void {
+    const start = this.camera.position.clone();
+    const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
+    const mat = new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.9 });
+    const line = new THREE.Line(geo, mat);
+    this.scene.add(line);
+    this.tracers.push({ line, geo, mat, untilSec: this.simTime + 0.06 });
+  }
+
   private renderFrame(): void {
     const t0 = performance.now();
+    this.syncCamera();
+    // 清理过期曳光
+    for (let i = this.tracers.length - 1; i >= 0; i--) {
+      const tr = this.tracers[i];
+      if (this.simTime >= tr.untilSec) {
+        this.scene.remove(tr.line);
+        tr.geo.dispose();
+        tr.mat.dispose();
+        this.tracers.splice(i, 1);
+      }
+    }
     this.renderer.render(this.scene, this.camera);
     this.lastFrameMs = performance.now() - t0;
   }
@@ -150,16 +365,25 @@ export class GrayboxSession implements TrainingSession {
   private emitStats(): void {
     const stats: SessionStats = {
       simTimeSec: this.simTime,
-      shotsFired: 0,
-      hits: 0,
+      shotsFired: this.shots,
+      hits: this.hits,
       frameMs: this.lastFrameMs,
     };
-    for (const l of this.listeners) l(stats);
+    for (const l of this.statsListeners) l(stats);
+  }
+
+  private emit(e: SessionEvent): void {
+    for (const l of this.eventListeners) l(e);
   }
 
   onStats(l: StatsListener): () => void {
-    this.listeners.add(l);
-    return () => this.listeners.delete(l);
+    this.statsListeners.add(l);
+    return () => this.statsListeners.delete(l);
+  }
+
+  onEvent(l: EventListener): () => void {
+    this.eventListeners.add(l);
+    return () => this.eventListeners.delete(l);
   }
 
   get pointerInput(): PointerLockInput {
@@ -182,6 +406,8 @@ export class GrayboxSession implements TrainingSession {
 
   pause(): void {
     this.loop.stop();
+    this.triggerHeld = false;
+    this.keys.clear();
   }
 
   resume(): void {
@@ -191,11 +417,24 @@ export class GrayboxSession implements TrainingSession {
   reset(): void {
     this.loop.stop();
     this.simTime = 0;
-    if (this.map) {
+    this.shots = 0;
+    this.hits = 0;
+    this.lastShotSec = null;
+    this.triggerHeld = false;
+    this.keys.clear();
+    if (this.map && this.phys) {
+      const s = this.map.playerSpawn.position;
+      this.phys.body.setTranslation({ x: s[0], y: 0.9, z: s[2] }, true);
+      this.phys.vy = 0;
       this.yaw = this.map.playerSpawn.yaw;
       this.pitch = 0;
-      this.applyLook();
     }
+    for (const t of this.targets) {
+      t.alive = true;
+      t.hp = TARGET_HP;
+      t.group.visible = true;
+    }
+    this.syncCamera();
     this.loop.start();
   }
 
@@ -205,7 +444,14 @@ export class GrayboxSession implements TrainingSession {
     this.loop.stop();
     this.input.detach();
     this.input.exitLock();
-    this.listeners.clear();
+    for (const c of this.domCleanup) c();
+    this.statsListeners.clear();
+    this.eventListeners.clear();
+    for (const tr of this.tracers) {
+      tr.geo.dispose();
+      tr.mat.dispose();
+    }
+    if (this.phys) freePhysics(this.phys);
     for (const d of this.disposables) d.dispose();
     this.renderer.dispose();
   }
