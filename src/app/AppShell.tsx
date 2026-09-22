@@ -33,6 +33,7 @@ export function AppShell() {
     weaponId: 'vandal',
     distanceM: 20,
     difficulty: 'standard',
+    debugHitboxes: false,
   });
   const configRef = useRef(config);
   configRef.current = config;
@@ -41,6 +42,11 @@ export function AppShell() {
   useEffect(() => {
     sessionRef.current?.setWeapon(WEAPONS[config.weaponId]);
   }, [config.weaponId]);
+
+  // 命中区调试线框即时生效（不需重建会话）
+  useEffect(() => {
+    sessionRef.current?.setDebugHitboxes(config.debugHitboxes);
+  }, [config.debugHitboxes]);
 
   // 回合结束 → 写入 IndexedDB（含失败回合，不得剔除）+ 本局列表
   const handleRoundRef = useRef((rec: RoundInput) => {
@@ -73,6 +79,8 @@ export function AppShell() {
         {
           scenario: c.scenarioId,
           distanceM: c.distanceM,
+          difficulty: c.difficulty,
+          debugHitboxes: c.debugHitboxes,
           seed: Date.now() % 2147483647,
           onRound: (rec) => handleRoundRef.current(rec),
         },
@@ -103,14 +111,14 @@ export function AppShell() {
   // 准备界面切换训练模块/距离 → 重建会话（RELOAD → loading → ready）
   const bootedKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = `${config.scenarioId}@${config.distanceM}`;
+    const key = `${config.scenarioId}@${config.distanceM}#${config.difficulty}`;
     if (state === 'ready' && bootedKeyRef.current === null) bootedKeyRef.current = key;
     if (state === 'ready' && bootedKeyRef.current !== key) {
       bootedKeyRef.current = key;
       send('RELOAD');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, config.scenarioId, config.distanceM]);
+  }, [state, config.scenarioId, config.distanceM, config.difficulty]);
 
   useEffect(() => {
     const onResize = () => sessionRef.current?.resize();

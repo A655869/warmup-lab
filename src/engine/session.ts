@@ -13,6 +13,7 @@ import type { TrainingSession, SessionStats, StatsListener, SessionEvent, EventL
 import { loadMap } from '@/scenarios/loader';
 import type { TrainingMap } from '@/scenarios/types';
 import { createScenario, type Scenario, type ScenarioMode, type RoundResult } from '@/scenarios/runner';
+import { BotAvatar, type BotAnim } from '@/gameplay/BotAvatar';
 import { WEAPONS, RUN_SPEED_MPS, type WeaponProfile } from '@/data/params';
 import { canFire } from '@/gameplay/shooting';
 import { spreadDeg, sampleSpread } from '@/gameplay/spread';
@@ -27,6 +28,10 @@ export interface SessionOptions {
   /** 场景模式；null 为自由打靶（第一轮行为） */
   scenario: ScenarioMode | null;
   distanceM: number;
+  /** 难度：标准 / 强化模式（强化成绩不与标准比较，设计方案 §5.5） */
+  difficulty?: 'standard' | 'plus';
+  /** 命中区调试显示（手册 §8.3） */
+  debugHitboxes?: boolean;
   /** 可记录随机种子（手册 §10.3） */
   seed: number;
   /** 回合结束回调（含失败回合，不得剔除） */
@@ -107,6 +112,9 @@ export class GrayboxSession implements TrainingSession {
   private wallMeshes: THREE.Object3D[] = [];
   private shotIndex = 0;
   private onRoundCb: ((rec: RoundResult) => void) | null = null;
+  private avatar: BotAvatar | null = null;
+  private debugHitboxes = false;
+  private lastRenderT: number | null = null;
 
   private constructor(canvas: HTMLCanvasElement, weapon: WeaponProfile) {
     this.canvas = canvas;
@@ -133,17 +141,45 @@ export class GrayboxSession implements TrainingSession {
     s.map = await loadMap(mapUrl); // 校验失败会抛出 → 进入「加载失败」页
     s.phys = createPhysics(s.map);
     s.buildScene();
+    // 第三轮：加载人物 GLB 资产（失败同样进入「加载失败」页，不允许黑屏）
+    s.avatar = await BotAvatar.load('assets/models/agent.glb');
+    s.attachAvatar();
     s.bindDom();
     s.resize();
     s.seed = options.seed;
     s.rand = mulberry32(options.seed);
     s.onRoundCb = options.onRound ?? null;
-    if (options.scenario) s.setupScenario(options.scenario, options.distanceM);
+    s.debugHitboxes = options.debugHitboxes ?? false;
+    s.avatar.setDebugHitboxes(s.debugHitboxes);
+    if (options.scenario) s.setupScenario(options.scenario, options.distanceM, options.difficulty ?? 'standard');
     return s;
   }
 
+  /** 把人物资产挂到目标 0：隐藏几何占位体，命中判定改用绑定骨骼的判定体（§8.3） */
+  private attachAvatar(): void {
+    if (!this.avatar || this.targets.length === 0) return;
+    const t0 = this.targets[0];
+    // 几何占位体退出（移出射线列表，避免不可见网格挡射线）
+    for (const child of [...t0.group.children]) {
+      child.visible = false;
+      const idx = this.targetMeshes.indexOf(child);
+      if (idx >= 0) this.targetMeshes.splice(idx, 1);
+    }
+    t0.group.add(this.avatar.group);
+    // 命中区入网：射线判定打的是骨骼上的判定体（合并 userData，保留 debugWire 调试引用）
+    Object.assign(this.avatar.hitZones.head.userData, { kind: 'target', part: 'head', targetIdx: 0 });
+    Object.assign(this.avatar.hitZones.body.userData, { kind: 'target', part: 'body', targetIdx: 0 });
+    this.targetMeshes.push(this.avatar.hitZones.head, this.avatar.hitZones.body);
+  }
+
+  /** 命中区调试显示开关（手册 §8.3，检查视觉模型与判定体对齐） */
+  setDebugHitboxes(visible: boolean): void {
+    this.debugHitboxes = visible;
+    this.avatar?.setDebugHitboxes(visible);
+  }
+
   /** 场景模式初始化：单目标管理，多余目标隐藏；可调距离移动掩体（手册 §9.2） */
-  private setupScenario(mode: ScenarioMode, distanceM: number): void {
+  private setupScenario(mode: ScenarioMode, distanceM: number, difficulty: 'standard' | 'plus'): void {
     if (!this.map || !this.phys) return;
     // 多余目标退场（不受通用重生逻辑管理）
     for (let i = 1; i < this.targets.length; i++) {
@@ -159,7 +195,7 @@ export class GrayboxSession implements TrainingSession {
         this.phys!.boxColliders[i].setTranslation({ x: b.position[0], y: b.position[1], z: b.position[2] });
       });
     }
-    this.scenario = createScenario(mode, this.scenarioHooks(), distanceM);
+    this.scenario = createScenario(mode, this.scenarioHooks(), distanceM, difficulty);
   }
 
   private boxMeshes: THREE.Mesh[] = [];
@@ -181,6 +217,7 @@ export class GrayboxSession implements TrainingSession {
         t0().group.visible = true;
       },
       isTargetVisible: () => this.checkTargetVisible(),
+      setAnim: (name: BotAnim) => this.avatar?.setBaseAnim(name),
       endRound: (rec: RoundResult) => {
         // 引擎只产出回合骨架；参数版本/武器等由外层补全（固定参数快照，§十四）
         this.onRoundCb?.(rec);
@@ -194,7 +231,8 @@ export class GrayboxSession implements TrainingSession {
     if (!t || !t.group.visible || !t.alive) return false;
     this.syncCamera();
     const headPos = new THREE.Vector3();
-    t.group.children[1].getWorldPosition(headPos);
+    if (this.avatar) this.avatar.hitZones.head.getWorldPosition(headPos);
+    else t.group.children[1]?.getWorldPosition(headPos);
     const dir = headPos.clone().sub(this.camera.position);
     const dist = dir.length();
     dir.normalize();
@@ -448,10 +486,14 @@ export class GrayboxSession implements TrainingSession {
             t.respawnAtSec = this.simTime + RESPAWN_SEC;
             this.emit({ type: 'kill', atSec: this.simTime });
           } else {
-            // 受击闪白反馈
-            t.flashUntilSec = this.simTime + 0.12;
-            t.bodyMat.emissive.setHex(0xffffff);
-            t.headMat.emissive.setHex(0xffffff);
+            // 受击反馈：人物模型播放受击动画（§8.2）；几何占位体闪白
+            if (this.avatar && ud.targetIdx === 0) {
+              this.avatar.playHit();
+            } else {
+              t.flashUntilSec = this.simTime + 0.12;
+              t.bodyMat.emissive.setHex(0xffffff);
+              t.headMat.emissive.setHex(0xffffff);
+            }
           }
         }
       }
@@ -474,6 +516,9 @@ export class GrayboxSession implements TrainingSession {
 
   private renderFrame(): void {
     const t0 = performance.now();
+    const dt = this.lastRenderT === null ? 1 / 60 : Math.min(0.1, (t0 - this.lastRenderT) / 1000);
+    this.lastRenderT = t0;
+    this.avatar?.update(dt); // AnimationMixer 混合推进（§8.2）
     this.syncCamera();
     // 清理过期曳光
     for (let i = this.tracers.length - 1; i >= 0; i--) {
@@ -585,6 +630,7 @@ export class GrayboxSession implements TrainingSession {
       tr.mat.dispose();
     }
     if (this.phys) freePhysics(this.phys);
+    this.avatar?.dispose();
     for (const d of this.disposables) d.dispose();
     this.renderer.dispose();
   }

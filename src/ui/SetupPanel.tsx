@@ -5,6 +5,8 @@ export interface TrainingConfig {
   weaponId: 'vandal' | 'phantom';
   distanceM: number;
   difficulty: 'standard' | 'plus';
+  /** 命中区调试显示（手册 §8.3） */
+  debugHitboxes: boolean;
 }
 
 export const SCENARIO_LABEL: Record<TrainingConfig['scenarioId'], string> = {
@@ -85,6 +87,15 @@ export function SetupPanel({
           <option value="standard">标准</option>
           <option value="plus">强化模式（成绩不与标准模式比较）</option>
         </select>
+      </label>
+
+      <label className="flex items-center gap-2 text-sm text-zinc-400">
+        <input
+          type="checkbox"
+          checked={config.debugHitboxes}
+          onChange={(e) => onChange({ ...config, debugHitboxes: e.target.checked })}
+        />
+        命中区调试显示
       </label>
 
       <button

@@ -34,6 +34,8 @@ export interface ScenarioHooks {
    * 目标头部判定体中心与相机之间无墙体遮挡的模拟步。
    */
   isTargetVisible(): boolean;
+  /** 机器人动画切换（第三轮：移动时播 Strafe，其余 Idle） */
+  setAnim?(name: 'Idle' | 'StrafeLeft' | 'StrafeRight' | 'Crouch' | 'Hit'): void;
   endRound(rec: RoundResult): void;
 }
 
@@ -201,20 +203,33 @@ export class HoldAngleScenario implements Scenario {
   private readonly z: number;
 
   /** peek 移动时长（秒，出枪速度，难度参数之一） */
-  private readonly PEEK_DURATION_SEC = 0.3;
+  private readonly peekDurationSec: number;
+  /** 反应窗口（秒）：目标暴露后多久判超时 */
+  private readonly timeoutSec: number;
+  private readonly delayMinSec: number;
+  private readonly delayMaxSec: number;
 
   private h: ScenarioHooks;
 
-  constructor(h: ScenarioHooks, distanceM: number) {
+  /**
+   * 难度为可解释参数（手册 §11.2）：
+   * - standard：peek 0.30s、随机等待 0.8–2.0s、反应窗口 4.0s
+   * - plus（强化模式）：peek 0.22s、随机等待 0.4–1.2s、反应窗口 3.0s；成绩不与标准模式直接比较（§5.5）
+   */
+  constructor(h: ScenarioHooks, distanceM: number, difficulty: 'standard' | 'plus' = 'standard') {
     this.h = h;
     this.z = -distanceM;
+    this.peekDurationSec = difficulty === 'plus' ? 0.22 : 0.3;
+    this.timeoutSec = difficulty === 'plus' ? 3.0 : 4.0;
+    this.delayMinSec = difficulty === 'plus' ? 0.4 : 0.8;
+    this.delayMaxSec = difficulty === 'plus' ? 1.2 : 2.0;
     this.r = freshBase(h.nowSec());
     this.peekAtSec = h.nowSec() + this.randomDelay();
     this.setupPositions();
   }
 
   private randomDelay(): number {
-    return 0.8 + this.h.rng() * 1.2; // 0.8–2.0s 随机等待（§11.2 随机化）
+    return this.delayMinSec + this.h.rng() * (this.delayMaxSec - this.delayMinSec); // §11.2 随机化
   }
 
   private setupPositions(): void {
@@ -253,13 +268,17 @@ export class HoldAngleScenario implements Scenario {
     if (this.phase === 'hidden' && now >= this.peekAtSec) {
       this.phase = 'peeking';
       this.h.showTarget();
+      this.h.setAnim?.(this.exposedX < this.hiddenX ? 'StrafeLeft' : 'StrafeRight');
     }
     if (this.phase === 'peeking') {
-      this.peekProgress = Math.min(1, this.peekProgress + stepSec / this.PEEK_DURATION_SEC);
+      this.peekProgress = Math.min(1, this.peekProgress + stepSec / this.peekDurationSec);
       const x = this.hiddenX + (this.exposedX - this.hiddenX) * this.peekProgress;
       this.h.moveTarget(x - this.curX);
       this.curX = x;
-      if (this.peekProgress >= 1) this.phase = 'exposed';
+      if (this.peekProgress >= 1) {
+        this.phase = 'exposed';
+        this.h.setAnim?.('Idle');
+      }
     }
     if (this.phase !== 'hidden') {
       // 首次可见采样（口径：头部判定体中心与相机间无遮挡）
@@ -270,7 +289,7 @@ export class HoldAngleScenario implements Scenario {
         this.finish('kill');
         return;
       }
-      if (this.visibleSec !== null && now - this.visibleSec >= HOLD_ANGLE_TIMEOUT_SEC)
+      if (this.visibleSec !== null && now - this.visibleSec >= this.timeoutSec)
         this.finish('timeout');
     }
   }
@@ -316,8 +335,9 @@ export function createScenario(
   mode: ScenarioMode,
   hooks: ScenarioHooks,
   distanceM: number,
+  difficulty: 'standard' | 'plus' = 'standard',
 ): Scenario {
   return mode === 'stop-shot'
     ? new StopShotScenario(hooks, distanceM)
-    : new HoldAngleScenario(hooks, distanceM);
+    : new HoldAngleScenario(hooks, distanceM, difficulty);
 }
