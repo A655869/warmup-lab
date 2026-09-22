@@ -36,6 +36,11 @@ export interface ScenarioHooks {
   isTargetVisible(): boolean;
   /** 机器人动画切换（第三轮：移动时播 Strafe，其余 Idle） */
   setAnim?(name: 'Idle' | 'StrafeLeft' | 'StrafeRight' | 'Crouch' | 'Hit'): void;
+  /**
+   * 机器人开火表现（纯视觉：后坐动画 + 枪口火光 + 曳光）。
+   * 红线：曳光不参与命中判定、机器人火力不造成伤害、不影响回合结果（§10.2/§11.2）。
+   */
+  botFire?(): void;
   endRound(rec: RoundResult): void;
 }
 
@@ -197,6 +202,8 @@ export class HoldAngleScenario implements Scenario {
   private visibleSec: number | null = null;
   private peekProgress = 0;
   private intermissionUntil: number | null = null;
+  /** 机器人下一发开火时刻（暴露后周期性开火，纯视觉压制） */
+  private nextBotShotSec: number | null = null;
   private hiddenX = 0;
   private exposedX = 0;
   private curX = 0;
@@ -251,6 +258,7 @@ export class HoldAngleScenario implements Scenario {
     this.visibleSec = null;
     this.peekProgress = 0;
     this.intermissionUntil = null;
+    this.nextBotShotSec = null;
     this.setupPositions();
   }
 
@@ -278,11 +286,24 @@ export class HoldAngleScenario implements Scenario {
       if (this.peekProgress >= 1) {
         this.phase = 'exposed';
         this.h.setAnim?.('Idle');
+        // 暴露 0.35s 后机器人开始朝玩家方向开火（约 3 发/秒点射，纯视觉压制）
+        this.nextBotShotSec = now + 0.35;
       }
     }
     if (this.phase !== 'hidden') {
       // 首次可见采样（口径：头部判定体中心与相机间无遮挡）
       if (this.visibleSec === null && this.h.isTargetVisible()) this.visibleSec = now;
+
+      // 机器人开火节奏：仅在完全暴露且仍存活时（被击中即停火）
+      if (
+        this.phase === 'exposed' &&
+        this.nextBotShotSec !== null &&
+        now >= this.nextBotShotSec &&
+        this.h.targetAlive()
+      ) {
+        this.h.botFire?.();
+        this.nextBotShotSec = now + 0.33;
+      }
 
       if (!this.h.targetAlive()) {
         this.r.killSec = now;

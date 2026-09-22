@@ -218,6 +218,7 @@ export class GrayboxSession implements TrainingSession {
       },
       isTargetVisible: () => this.checkTargetVisible(),
       setAnim: (name: BotAnim) => this.avatar?.setBaseAnim(name),
+      botFire: () => this.botFireVisual(),
       endRound: (rec: RoundResult) => {
         // 引擎只产出回合骨架；参数版本/武器等由外层补全（固定参数快照，§十四）
         this.onRoundCb?.(rec);
@@ -503,6 +504,27 @@ export class GrayboxSession implements TrainingSession {
     this.scenario?.onFired({ hitTarget, part: hitPart });
     // 曳光：纯视觉效果，不参与命中判定（红线）
     this.spawnTracer(endPoint ?? this.raycaster.ray.at(80, new THREE.Vector3()));
+  }
+
+  /**
+   * 机器人开火表现（纯视觉，§11.2 口径）：
+   * 后坐动画 + 枪口火光 + 曳光掠过玩家——不参与命中判定、不造成伤害、不影响回合结果。
+   */
+  private botFireVisual(): void {
+    if (!this.avatar || !this.avatar.group.visible) return;
+    this.avatar.playFire();
+    this.syncCamera();
+    const from = new THREE.Vector3();
+    this.avatar.muzzle.getWorldPosition(from);
+    const to = this.camera.position.clone();
+    to.x += (this.rand() - 0.5) * 1.4; // 随机脱靶偏移：曳光掠过而非正中玩家
+    to.y += (this.rand() - 0.5) * 1.0;
+    to.z += 1.5;
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const mat = new THREE.LineBasicMaterial({ color: 0xff8855, transparent: true, opacity: 0.9 });
+    const line = new THREE.Line(geo, mat);
+    this.scene.add(line);
+    this.tracers.push({ line, geo, mat, untilSec: this.simTime + 0.08 });
   }
 
   private spawnTracer(end: THREE.Vector3): void {

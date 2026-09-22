@@ -27,7 +27,7 @@ test('人物 GLB 加载：五动画齐全，命中区绑定骨骼并入网', asy
     };
   });
   expect(info.clips).toEqual(
-    expect.arrayContaining(['Idle', 'StrafeLeft', 'StrafeRight', 'Crouch', 'Hit']),
+    expect.arrayContaining(['Idle', 'StrafeLeft', 'StrafeRight', 'Crouch', 'Hit', 'Fire']),
   );
   expect(info.headInNet).toBe(true);
   expect(info.bodyInNet).toBe(true);
@@ -98,4 +98,36 @@ test('命中人物触发受击动画反馈', async ({ page }) => {
   });
   expect(res.during).toBe('Hit');
   expect(res.after).toBe('Idle');
+});
+
+test('机器人暴露后开火：Fire 动画 + 枪口火光 + 曳光（纯视觉）', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /开始训练/ })).toBeEnabled();
+  await page.locator('select').first().selectOption('hold-angle');
+  await expect(page.getByRole('button', { name: /开始训练/ })).toBeEnabled({ timeout: 15000 });
+
+  const res = await page.evaluate(() => {
+    const s = (window as unknown as { __session: any }).__session;
+    const sc = s.scenario;
+    const seenAnims = new Set<string>();
+    let flashSeen = false;
+    // 驱动到暴露后再走 1.5 秒：机器人应已开火数发（无渲染帧时曳光不被清理，可计数）
+    let extra = 0;
+    for (let i = 0; i < 1200 && extra < 180; i++) {
+      s.simulate(1 / 120);
+      seenAnims.add(s.avatar.current);
+      if (s.avatar.muzzleFlash.visible) flashSeen = true;
+      if (sc.phase === 'exposed') extra++;
+    }
+    return {
+      phase: sc.phase,
+      anims: [...seenAnims],
+      flashSeen,
+      tracerCount: s.tracers.length,
+    };
+  });
+  expect(res.phase).toBe('exposed');
+  expect(res.anims).toContain('Fire');
+  expect(res.flashSeen).toBe(true);
+  expect(res.tracerCount).toBeGreaterThan(0);
 });
