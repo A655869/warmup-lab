@@ -117,6 +117,12 @@ export class GrayboxSession implements TrainingSession {
   private onRoundCb: ((rec: RoundResult) => void) | null = null;
   private avatar: BotAvatar | null = null;
   private decor: THREE.Group | null = null;
+  // —— 第一人称视模（纯视觉层，不参与判定）——
+  private viewmodel: THREE.Group | null = null;
+  private vmBasePos = new THREE.Vector3(0.17, -0.16, -0.52);
+  private vmKick = 0; // 后坐量 0..1
+  private vmFlash: THREE.Sprite | null = null;
+  private vmFlashTimer = 0;
   private debugHitboxes = false;
   private lastRenderT: number | null = null;
 
@@ -147,6 +153,8 @@ export class GrayboxSession implements TrainingSession {
     s.buildScene();
     // 第四轮：装饰场景为可选视觉层——加载失败回退灰盒视觉，不阻塞训练主流程
     if (options.decorUrl) await s.loadDecor(options.decorUrl);
+    // 第五轮：第一人称持枪视模（同为可选视觉层）
+    await s.loadViewmodel('assets/models/viewmodel.glb');
     // 第三轮：加载人物 GLB 资产（失败同样进入「加载失败」页，不允许黑屏）
     s.avatar = await BotAvatar.load('assets/models/agent.glb');
     s.attachAvatar();
@@ -178,6 +186,57 @@ export class GrayboxSession implements TrainingSession {
     }
   }
 
+  /**
+   * 第一人称持枪视模（参考 OKIAIMX 的视角布局）：
+   * 挂在相机节点上，代码驱动后坐；逐节点禁用 raycast，纯视觉不参与判定。
+   * 加载失败回退为无视模（不影响训练主流程）。
+   */
+  private async loadViewmodel(url: string): Promise<void> {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(url);
+      const vm = gltf.scene;
+      vm.traverse((o) => {
+        o.raycast = () => {};
+      });
+      // 模型枪口朝 Blender -Y（导出后 +Z），旋转 π 对准相机前方 -Z
+      vm.rotation.y = Math.PI;
+      vm.scale.setScalar(0.55); // 视模惯例：缩小持握模型，避免近大畸变
+      vm.position.copy(this.vmBasePos);
+      // 枪口火光（Sprite 面向相机）
+      const flash = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          color: 0xffcc55,
+          transparent: true,
+          opacity: 0.95,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      flash.scale.set(0.09, 0.09, 1);
+      flash.visible = false;
+      const muzzle = vm.getObjectByName('VmMuzzle');
+      (muzzle ?? vm).add(flash);
+      this.vmFlash = flash;
+      this.camera.add(vm); // 相机节点需入场景树才能渲染子节点
+      if (!this.camera.parent) this.scene.add(this.camera);
+      this.viewmodel = vm;
+      this.applyWeaponTint();
+    } catch (err) {
+      console.warn('持枪视模加载失败，回退为无视模（不影响训练）：', err);
+    }
+  }
+
+  /** 武器切换时同步视模主色（狂徒红 / 幻影浅灰，参数台账同口径） */
+  private applyWeaponTint(): void {
+    if (!this.viewmodel) return;
+    const accent = this.weapon.id === 'phantom' ? new THREE.Color(0.72, 0.72, 0.76) : new THREE.Color(0.70, 0.24, 0.28);
+    this.viewmodel.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const m = o.material as THREE.MeshStandardMaterial;
+        if (m?.name === 'GunAccent') m.color.copy(accent);
+      }
+    });
+  }
   /** 把人物资产挂到目标 0：隐藏几何占位体，命中判定改用绑定骨骼的判定体（§8.3） */
   private attachAvatar(): void {
     if (!this.avatar || this.targets.length === 0) return;
@@ -271,6 +330,7 @@ export class GrayboxSession implements TrainingSession {
 
   setWeapon(w: WeaponProfile): void {
     this.weapon = w;
+    this.applyWeaponTint();
   }
 
   private track<T extends { dispose(): void }>(r: T): T {
@@ -280,28 +340,28 @@ export class GrayboxSession implements TrainingSession {
 
   private buildScene(): void {
     if (!this.map) return;
-    this.scene.background = new THREE.Color(0x1a1d24);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x333a45, 1.1));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    this.scene.background = new THREE.Color(0x9fb4c4); // 暖晴天空
+    this.scene.add(new THREE.HemisphereLight(0xfff2df, 0x5c4f3d, 1.15));
+    const sun = new THREE.DirectionalLight(0xffe8c4, 1.5);
     sun.position.set(10, 20, 8);
     this.scene.add(sun);
 
     const [gx, gz] = this.map.ground.size;
     const ground = new THREE.Mesh(
       this.track(new THREE.PlaneGeometry(gx, gz)),
-      this.track(new THREE.MeshLambertMaterial({ color: 0x3a4048 })),
+      this.track(new THREE.MeshLambertMaterial({ color: 0x8f7a5c })), // 暖调石板地
     );
     ground.rotation.x = -Math.PI / 2;
     ground.userData.kind = 'wall';
     this.scene.add(ground);
     this.wallMeshes.push(ground);
-    this.scene.add(new THREE.GridHelper(Math.max(gx, gz), Math.max(gx, gz), 0x555c66, 0x2c313a));
+    this.scene.add(new THREE.GridHelper(Math.max(gx, gz), Math.max(gx, gz), 0x6e5f49, 0x7d6c52));
 
-    // 墙体/掩体：高对比配色（手册 §9.3）；userData.kind='wall' 供射线判遮挡
+    // 墙体/掩体：暖色砂岩 + 木箱（高对比，手册 §9.3）；userData.kind='wall' 供射线判遮挡
     for (const b of this.map.boxes) {
       const mesh = new THREE.Mesh(
         this.track(new THREE.BoxGeometry(...b.size)),
-        this.track(new THREE.MeshLambertMaterial({ color: b.tag === 'cover' ? 0x7a6a4f : 0x59616e })),
+        this.track(new THREE.MeshLambertMaterial({ color: b.tag === 'cover' ? 0x8a6b42 : 0xc4ad8a })),
       );
       mesh.position.set(...b.position);
       mesh.userData.kind = 'wall';
@@ -458,6 +518,13 @@ export class GrayboxSession implements TrainingSession {
       this.lastShotSec = this.simTime;
       this.shots += 1;
       this.shotIndex += 1;
+      // 第一人称反馈：视模后坐 + 枪口火光（纯视觉，命中判定见 fireRay 射线）
+      this.vmKick = 1;
+      if (this.vmFlash) {
+        this.vmFlash.visible = true;
+        this.vmFlashTimer = 0.05;
+        this.vmFlash.material.rotation = Math.random() * Math.PI;
+      }
       this.fireRay();
     }
 
@@ -551,7 +618,8 @@ export class GrayboxSession implements TrainingSession {
   }
 
   private spawnTracer(end: THREE.Vector3): void {
-    const start = this.camera.position.clone();
+    // 从枪口侧下方出射（而不是相机中心），避免近裁剪面大三角
+    const start = new THREE.Vector3(0.14, -0.12, -0.5).applyMatrix4(this.camera.matrixWorld);
     const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
     const mat = new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.9 });
     const line = new THREE.Line(geo, mat);
@@ -564,6 +632,21 @@ export class GrayboxSession implements TrainingSession {
     const dt = this.lastRenderT === null ? 1 / 60 : Math.min(0.1, (t0 - this.lastRenderT) / 1000);
     this.lastRenderT = t0;
     this.avatar?.update(dt); // AnimationMixer 混合推进（§8.2）
+    // 视模后坐回弹（代码驱动，帧时间推进）
+    if (this.viewmodel) {
+      this.vmKick = Math.max(0, this.vmKick - dt * 6);
+      const k = this.vmKick * this.vmKick;
+      this.viewmodel.position.set(
+        this.vmBasePos.x,
+        this.vmBasePos.y - k * 0.02,
+        this.vmBasePos.z + k * 0.06,
+      );
+      this.viewmodel.rotation.x = -k * 0.12;
+    }
+    if (this.vmFlashTimer > 0) {
+      this.vmFlashTimer -= dt;
+      if (this.vmFlashTimer <= 0 && this.vmFlash) this.vmFlash.visible = false;
+    }
     this.syncCamera();
     // 清理过期曳光
     for (let i = this.tracers.length - 1; i >= 0; i--) {
@@ -685,6 +768,19 @@ export class GrayboxSession implements TrainingSession {
         else m.dispose();
       }
     });
+    // 第一人称视模资源释放
+    if (this.viewmodel) {
+      this.camera.remove(this.viewmodel);
+      this.viewmodel.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          const m = o.material;
+          if (Array.isArray(m)) m.forEach((x) => x.dispose());
+          else m.dispose();
+        }
+      });
+    }
+    this.vmFlash?.material.dispose();
     for (const d of this.disposables) d.dispose();
     this.renderer.dispose();
   }

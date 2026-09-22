@@ -50,9 +50,10 @@ def build(out_path, half_w, wall_z0, wall_z1, end_z):
     """half_w: 侧墙内表面 |x|；wall_z0..wall_z1: 侧墙沿 z 范围；end_z: 端墙位置。"""
     reset()
     global PANEL, STRIP, BEAM, RING
-    PANEL = make_mat("Panel", (0.23, 0.26, 0.32))
-    STRIP = make_mat("Strip", (0.05, 0.10, 0.12), emission=(0.15, 0.85, 1.0), strength=3.5)  # 青色发光
-    BEAM = make_mat("Beam", (0.12, 0.13, 0.16))
+    # 暖色调砂岩风（Ascent 调性）：米色墙面板、木梁、暖白灯带
+    PANEL = make_mat("Panel", (0.72, 0.62, 0.48))
+    STRIP = make_mat("Strip", (0.20, 0.16, 0.10), emission=(1.0, 0.85, 0.6), strength=3.0)   # 暖白发光
+    BEAM = make_mat("Beam", (0.32, 0.22, 0.14))
     RING = make_mat("Ring", (0.10, 0.05, 0.05), emission=(1.0, 0.35, 0.2), strength=3.0)      # 红橙发光
 
     # —— 地面车道线：两侧长线 + 中线虚线段 ——
