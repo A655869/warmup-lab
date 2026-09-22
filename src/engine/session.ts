@@ -14,6 +14,7 @@ import { loadMap } from '@/scenarios/loader';
 import type { TrainingMap } from '@/scenarios/types';
 import { createScenario, type Scenario, type ScenarioMode, type RoundResult } from '@/scenarios/runner';
 import { BotAvatar, type BotAnim } from '@/gameplay/BotAvatar';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { WEAPONS, RUN_SPEED_MPS, type WeaponProfile } from '@/data/params';
 import { canFire } from '@/gameplay/shooting';
 import { spreadDeg, sampleSpread } from '@/gameplay/spread';
@@ -32,6 +33,8 @@ export interface SessionOptions {
   difficulty?: 'standard' | 'plus';
   /** 命中区调试显示（手册 §8.3） */
   debugHitboxes?: boolean;
+  /** 训练场装饰场景 GLB（纯视觉层，不参与碰撞与命中判定） */
+  decorUrl?: string;
   /** 可记录随机种子（手册 §10.3） */
   seed: number;
   /** 回合结束回调（含失败回合，不得剔除） */
@@ -113,6 +116,7 @@ export class GrayboxSession implements TrainingSession {
   private shotIndex = 0;
   private onRoundCb: ((rec: RoundResult) => void) | null = null;
   private avatar: BotAvatar | null = null;
+  private decor: THREE.Group | null = null;
   private debugHitboxes = false;
   private lastRenderT: number | null = null;
 
@@ -141,6 +145,8 @@ export class GrayboxSession implements TrainingSession {
     s.map = await loadMap(mapUrl); // 校验失败会抛出 → 进入「加载失败」页
     s.phys = createPhysics(s.map);
     s.buildScene();
+    // 第四轮：装饰场景为可选视觉层——加载失败回退灰盒视觉，不阻塞训练主流程
+    if (options.decorUrl) await s.loadDecor(options.decorUrl);
     // 第三轮：加载人物 GLB 资产（失败同样进入「加载失败」页，不允许黑屏）
     s.avatar = await BotAvatar.load('assets/models/agent.glb');
     s.attachAvatar();
@@ -153,6 +159,23 @@ export class GrayboxSession implements TrainingSession {
     s.avatar.setDebugHitboxes(s.debugHitboxes);
     if (options.scenario) s.setupScenario(options.scenario, options.distanceM, options.difficulty ?? 'standard');
     return s;
+  }
+
+  /**
+   * 装饰场景（手册 §8.1 视觉升级）：
+   * 纯视觉层——逐节点禁用 raycast，不参与命中判定；物理碰撞仍由灰盒 JSON 决定，两边互不干扰。
+   */
+  private async loadDecor(url: string): Promise<void> {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(url);
+      gltf.scene.traverse((o) => {
+        o.raycast = () => {};
+      });
+      this.decor = gltf.scene;
+      this.scene.add(gltf.scene);
+    } catch (err) {
+      console.warn('装饰场景加载失败，回退灰盒视觉（不影响训练）：', err);
+    }
   }
 
   /** 把人物资产挂到目标 0：隐藏几何占位体，命中判定改用绑定骨骼的判定体（§8.3） */
@@ -653,6 +676,15 @@ export class GrayboxSession implements TrainingSession {
     }
     if (this.phys) freePhysics(this.phys);
     this.avatar?.dispose();
+    // 装饰场景资源释放（§6.4）
+    this.decor?.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        const m = o.material;
+        if (Array.isArray(m)) m.forEach((x) => x.dispose());
+        else m.dispose();
+      }
+    });
     for (const d of this.disposables) d.dispose();
     this.renderer.dispose();
   }

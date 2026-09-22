@@ -75,30 +75,49 @@ DARK = make_mat("Dark", (0.16, 0.17, 0.20))            # 深灰关节
 PLATE = make_mat("Plate", (0.55, 0.57, 0.62))          # 浅灰装甲板
 GUN = make_mat("Gun", (0.10, 0.10, 0.12))              # 枪身枪金属
 VISOR = make_mat("Visor", (0.05, 0.08, 0.10), emission=(0.2, 0.9, 1.0), emission_strength=4.0)  # 发光面罩
+CORE = make_mat("Core", (0.10, 0.05, 0.05), emission=(1.0, 0.3, 0.2), emission_strength=3.0)    # 胸口核心灯
 
-# 躯干 / 骨盆 / 头（含发光面罩 + 肩甲，机甲剪影）
-add_box("Torso", (0, 0, 1.25), (0.42, 0.24, 0.42), "Spine", ARMOR)
-add_box("ChestPlate", (0, -0.13, 1.32), (0.30, 0.06, 0.24), "Spine", PLATE)
-add_box("Pelvis", (0, 0, 0.95), (0.36, 0.22, 0.20), "Hips", DARK)
+# 头部组件（Head 骨）：头盔 + 发光面罩 + 天线
 add_box("Head", (0, 0, 1.62), (0.24, 0.24, 0.26), "Head", PLATE)
 add_box("Visor", (0, -0.125, 1.63), (0.18, 0.02, 0.07), "Head", VISOR)
+add_box("HelmetTop", (0, 0, 1.76), (0.28, 0.28, 0.06), "Head", ARMOR)
+add_box("Antenna", (0.10, 0.02, 1.84), (0.015, 0.015, 0.14), "Head", DARK)
+# 躯干组件（Spine 骨）：胸甲 + 核心灯 + 背包 + 肩甲
+add_box("Torso", (0, 0, 1.25), (0.42, 0.24, 0.42), "Spine", ARMOR)
+add_box("ChestPlate", (0, -0.13, 1.32), (0.30, 0.06, 0.24), "Spine", PLATE)
+add_box("CoreLight", (0, -0.17, 1.32), (0.08, 0.02, 0.08), "Spine", CORE)
+add_box("Backpack", (0, 0.15, 1.28), (0.30, 0.08, 0.30), "Spine", DARK)
 add_box("ShoulderL", (0.27, 0, 1.44), (0.16, 0.20, 0.10), "Spine", ARMOR)
 add_box("ShoulderR", (-0.27, 0, 1.44), (0.16, 0.20, 0.10), "Spine", ARMOR)
-# 腿
+# 骨盆（Hips 骨）
+add_box("Pelvis", (0, 0, 0.95), (0.36, 0.22, 0.20), "Hips", DARK)
+add_box("BeltPlate", (0, -0.12, 0.98), (0.28, 0.04, 0.10), "Hips", PLATE)
+# 腿：大腿 + 护膝 + 小腿 + 脚
 add_box("ThighL", (0.11, 0, 0.72), (0.13, 0.15, 0.45), "Thigh.L", DARK)
+add_box("KneeL", (0.11, -0.08, 0.52), (0.12, 0.06, 0.10), "Thigh.L", PLATE)
 add_box("CalfL", (0.11, 0, 0.28), (0.11, 0.13, 0.45), "Calf.L", ARMOR)
+add_box("FootL", (0.11, -0.05, 0.04), (0.12, 0.22, 0.08), "Calf.L", DARK)
 add_box("ThighR", (-0.11, 0, 0.72), (0.13, 0.15, 0.45), "Thigh.R", DARK)
+add_box("KneeR", (-0.11, -0.08, 0.52), (0.12, 0.06, 0.10), "Thigh.R", PLATE)
 add_box("CalfR", (-0.11, 0, 0.28), (0.11, 0.13, 0.45), "Calf.R", ARMOR)
-# 手臂（沿骨骼方向摆成持枪姿态）
+add_box("FootR", (-0.11, -0.05, 0.04), (0.12, 0.22, 0.08), "Calf.R", DARK)
+# 手臂（沿骨骼方向摆成持枪姿态）：大臂 + 护肘 + 小臂 + 手
 add_box("UpperArmL", (0.25, -0.08, 1.29), (0.09, 0.20, 0.10), "Arm.L", DARK)
+add_box("ElbowL", (0.24, -0.17, 1.17), (0.10, 0.06, 0.10), "Arm.L", ARMOR)
 add_box("ForearmL", (0.15, -0.31, 1.235), (0.20, 0.22, 0.09), "Forearm.L", PLATE)
+add_box("HandL", (0.06, -0.44, 1.27), (0.07, 0.08, 0.07), "Forearm.L", DARK)
 add_box("UpperArmR", (-0.24, -0.05, 1.28), (0.09, 0.16, 0.10), "Arm.R", DARK)
+add_box("ElbowR", (-0.22, -0.11, 1.15), (0.10, 0.06, 0.10), "Arm.R", ARMOR)
 add_box("ForearmR", (-0.12, -0.21, 1.22), (0.18, 0.20, 0.09), "Forearm.R", PLATE)
-# 步枪（绑右臂，双手持握指向 -Y）：机匣 + 枪管 + 弹匣 + 枪托
+add_box("HandR", (-0.03, -0.30, 1.27), (0.07, 0.08, 0.07), "Forearm.R", DARK)
+# 步枪 v2（绑右臂，双手持握指向 -Y）：机匣 + 枪管 + 枪口制退器 + 瞄具 + 握把 + 弹匣 + 枪托
 add_box("RifleBody", (0.0, -0.40, 1.29), (0.06, 0.42, 0.09), "Forearm.R", GUN)
 add_box("RifleBarrel", (0.0, -0.68, 1.30), (0.035, 0.22, 0.035), "Forearm.R", GUN)
-add_box("RifleMag", (0.0, -0.33, 1.21), (0.045, 0.08, 0.12), "Forearm.R", GUN)
-add_box("RifleStock", (0.0, -0.16, 1.28), (0.05, 0.14, 0.07), "Forearm.R", GUN)
+add_box("RifleMuzzle", (0.0, -0.82, 1.30), (0.05, 0.08, 0.05), "Forearm.R", DARK)
+add_box("RifleScope", (0.0, -0.42, 1.36), (0.04, 0.16, 0.05), "Forearm.R", DARK)
+add_box("RifleGrip", (0.0, -0.26, 1.22), (0.04, 0.05, 0.10), "Forearm.R", GUN)
+add_box("RifleMag", (0.0, -0.38, 1.20), (0.045, 0.08, 0.12), "Forearm.R", GUN)
+add_box("RifleStock", (0.0, -0.16, 1.28), (0.05, 0.14, 0.07), "Forearm.R", DARK)
 
 # ---------- 动画（六个：待机 / 左移 / 右移 / 蹲下 / 受击 / 开火） ----------
 FPS = 24

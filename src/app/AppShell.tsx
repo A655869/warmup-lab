@@ -17,6 +17,12 @@ const MAP_URLS: Record<TrainingConfig['scenarioId'], string> = {
   'hold-angle': 'assets/maps/graybox-cover-peek-01.json',
 };
 
+/** 训练场装饰场景（纯视觉层；物理与判定仍由灰盒 JSON 决定） */
+const DECOR_URLS: Record<TrainingConfig['scenarioId'], string> = {
+  'stop-shot': 'assets/models/range-stop-corridor.glb',
+  'hold-angle': 'assets/models/range-cover-peek.glb',
+};
+
 type RoundInput = Omit<RoundRecord, 'id' | 'paramsVersion' | 'scenarioVersion' | 'weaponId' | 'startedAt'>;
 
 export function AppShell() {
@@ -81,6 +87,7 @@ export function AppShell() {
           distanceM: c.distanceM,
           difficulty: c.difficulty,
           debugHitboxes: c.debugHitboxes,
+          decorUrl: DECOR_URLS[c.scenarioId],
           seed: Date.now() % 2147483647,
           onRound: (rec) => handleRoundRef.current(rec),
         },
